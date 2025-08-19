@@ -80,13 +80,11 @@ class NoveLightCrawler(Crawler):
             "x-requested-with": "XMLHttpRequest",
         }
         chapters_lists = soup.select("select#select-pagination-chapter > option")
-        bar = self.progress_bar(
-            total=len(chapters_lists), desc="Chapters list", unit="page"
-        )
+        bar = self.progress_bar(total=len(chapters_lists), desc="Chapters list", unit="page")
         encountered_paid_chapter = False
         for page in reversed(chapters_lists):
             if encountered_paid_chapter:
-                break
+                continue
             params = {
                 "csrfmiddlewaretoken": csrfmiddlewaretoken,
                 "book_id": book_id,
@@ -100,7 +98,6 @@ class NoveLightCrawler(Crawler):
             for a in reversed(chapters_soup.select("a[href^='/book/chapter/']")):
                 if a.select_one(".chapter-info .cost"):
                     encountered_paid_chapter = True
-                    break
                 else:
                     self.chapters.append(
                         Chapter(
@@ -117,7 +114,19 @@ class NoveLightCrawler(Crawler):
             )
 
     def download_chapter_body(self, chapter: Chapter):
-        soup = self.get_soup(chapter.url)
+        headers = {
+            "Accept": "*/*",
+            "Referer": chapter.url,
+            "x-requested-with": "XMLHttpRequest",
+        }
+
+        soup = self.make_soup(
+            self.get_json(
+                chapter.url.replace("chapter", "ajax/read-chapter"),
+                headers=headers
+            )["content"]
+        )
+
         contents = soup.select_one(".chapter-text")
         self.cleaner.clean_contents(contents)
 

@@ -1,7 +1,8 @@
 import hashlib
 import logging
 from abc import abstractmethod
-from typing import Generator, List, Optional
+from threading import Event
+from typing import Generator, List, Optional, Union
 
 from bs4 import Tag
 
@@ -16,10 +17,13 @@ logger = logging.getLogger(__name__)
 class Crawler(Scraper):
     """Blueprint for creating new crawlers"""
 
+    base_url: Union[str, List[str]]
     has_manga = False
     has_mtl = False
-    base_url: List[str]
     language = ""
+
+    is_disabled = False
+    disable_reason: Optional[str] = None
 
     # ------------------------------------------------------------------------- #
     # Constructor & Destructors
@@ -48,7 +52,7 @@ class Crawler(Scraper):
         self.novel_cover: Optional[str] = None
         self.is_rtl: bool = False
         self.novel_synopsis: str = ""
-        self.novel_tags: list[str] = []
+        self.novel_tags: List[str] = []
 
         # Each item must contain these keys:
         # `id` - 1 based index of the volume
@@ -70,12 +74,12 @@ class Crawler(Scraper):
             parser=parser,
         )
 
-    def __del__(self) -> None:
+    def close(self) -> None:
         # if hasattr(self, "volumes"):
         #     self.volumes.clear()
         # if hasattr(self, "chapters"):
         #     self.chapters.clear()
-        super().__del__()
+        super().close()
 
     # ------------------------------------------------------------------------- #
     # Methods to implement in crawler
@@ -147,28 +151,25 @@ class Crawler(Scraper):
         self,
         chapters: List[Chapter],
         fail_fast=False,
+        signal=Event(),
     ) -> Generator[Chapter, None, None]:
+        def _downloader(chapter: Chapter):
+            chapter.body = ""
+            chapter.images = {}
+            chapter.body = self.download_chapter_body(chapter)
+            self.extract_chapter_images(chapter)
+            chapter.success = bool(chapter.body)
+            return chapter
+
         futures = [
-            self.executor.submit(self.download_chapter_body, chapter)
+            self.executor.submit(_downloader, chapter)
             for chapter in chapters
         ]
 
-        generator = self.resolve_future_generator(
+        yield from self.resolve_as_generator(
             futures,
             desc="Chapters",
             unit="item",
             fail_fast=fail_fast,
+            signal=signal,
         )
-
-        for index, result in enumerate(generator):
-            try:
-                chapter = chapters[index]
-                chapter.body = ""
-                chapter.images = {}
-                chapter.body = result
-                self.extract_chapter_images(chapter)
-                chapter.success = bool(result)
-            except KeyboardInterrupt:
-                break
-            finally:
-                yield chapter

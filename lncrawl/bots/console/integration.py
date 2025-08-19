@@ -1,4 +1,6 @@
+import atexit
 import logging
+import sys
 from urllib.parse import urlparse
 
 from questionary import prompt
@@ -9,16 +11,34 @@ from ...core.arguments import get_args
 from ...core.crawler import Crawler
 from ...core.exeptions import LNException
 from ...core.sources import crawler_list, prepare_crawler, rejected_sources
+from ...utils.platforms import Platform
 from .open_folder_prompt import display_open_folder
 from .resume_download import resume_session
 
 logger = logging.getLogger(__name__)
 
 
+def confirm_exit():
+    try:
+        input("Press ENTER to exit...")
+    except KeyboardInterrupt:
+        pass
+    except EOFError:
+        pass
+
+
 def start(self):
     from . import ConsoleBot
-
     assert isinstance(self, ConsoleBot)
+
+    if (
+        getattr(sys, "frozen", False)
+        and hasattr(sys, "_MEIPASS")
+        and Platform.windows
+        and not get_args().close_directly
+    ):
+        atexit.register(confirm_exit)
+    atexit.register(display.epilog)
 
     args = get_args()
     if args.list_sources:
@@ -30,15 +50,17 @@ def start(self):
         return
 
     self.app = App()
-    self.app.initialize()
 
     # Set filename if provided
     self.app.good_file_name = (args.filename or "").strip()
     self.app.no_suffix_after_filename = args.filename_only
 
     # Process user input
-    self.app.user_input = self.get_novel_url()
-    if not self.app.user_input.startswith("http"):
+    user_inp = self.get_novel_url()
+    self.app.user_input = user_inp
+    if not user_inp:
+        pass  # this case is not possible
+    elif not user_inp.startswith("http"):
         logger.info("Detected query input")
         search_links = [
             str(link)
@@ -47,13 +69,13 @@ def start(self):
         ]
         self.search_mode = True
     else:
-        hostname = urlparse(self.app.user_input).hostname
+        hostname = urlparse(user_inp).hostname
         if hostname in rejected_sources:
             display.url_rejected(rejected_sources[hostname])
             raise LNException("Fail to init crawler: %s is rejected", hostname)
         try:
             logger.info("Detected URL input")
-            self.app.crawler = prepare_crawler(self.app.user_input)
+            self.app.crawler = prepare_crawler(user_inp)
             self.search_mode = False
         except Exception as e:
             if "No crawler found for" in str(e):
@@ -61,7 +83,7 @@ def start(self):
             else:
                 logger.error("Failed to prepare crawler", e)
             logger.debug("Trying to find it in novelupdates", e)
-            guess = self.app.guess_novel_title(self.app.user_input)
+            guess = self.app.guess_novel_title(user_inp)
             display.guessed_url_for_novelupdates()
             self.app.user_input = self.confirm_guessed_novel(guess)
             search_links = ["https://www.novelupdates.com/"]
@@ -102,17 +124,19 @@ def start(self):
         try:
             _download_novel()
             break
+        except KeyboardInterrupt:
+            break
         except LNException as e:
             raise e
         except Exception as e:
             if not self.search_mode:
                 raise e
             elif not self.confirm_retry():
-                raise LNException("Cancelled by user") from e
+                display.error_message(LNException, "Canceled by user", e.__traceback__)
+                sys.exit(0)
 
-    self.app.start_download()
-    self.app.bind_books()
-    self.app.compress_books()
+    list(self.app.start_download())
+    list(self.app.bind_books())
 
     self.app.destroy()
     display.app_complete()

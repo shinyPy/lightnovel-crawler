@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import re
 
 from box import Box
 from bs4 import BeautifulSoup
@@ -15,7 +16,7 @@ class ChereadsCrawler(Crawler):
     base_url = ["https://www.chereads.com/"]
 
     def initialize(self):
-        self.init_executor(ratelimit=1)
+        self.init_executor(workers=5)
 
     def parse_metadata(self, soup: BeautifulSoup) -> Box:
         metadata_json = soup.select_one("script#__NEXT_DATA__, script#vite-plugin-ssr_pageContext")
@@ -36,7 +37,8 @@ class ChereadsCrawler(Crawler):
 
         book_id = str(book_info.bookId)
         cover_base_url = 'https://book-pic.webnovel.com/1001/bookcover/'
-        self.novel_cover = f'{cover_base_url}{book_id}'
+        cover_params = '?imageMogr2/thumbnail/2000,2000/quality/95/strip'
+        self.novel_cover = f'{cover_base_url}{book_id}{cover_params}'
 
         self.novel_title = str(book_info.bookName)
         self.novel_author = str(book_info.authorName)
@@ -67,4 +69,10 @@ class ChereadsCrawler(Crawler):
         soup = self.get_soup(chapter.url)
         metadata = self.parse_metadata(soup)
         contents = metadata.pageProps.pageData.chapterInfo.contents
-        return "".join([item.content for item in contents])
+
+        paras = [str(item.content) for item in contents]
+        if re.match(r'<p>[^Cc]*[Cc]h(ap(ter)?)?.\d+', paras[0]):
+            chapter.title = paras[0][3:-4].strip('*')
+            paras = paras[1:]
+
+        return "".join(paras)

@@ -1,20 +1,19 @@
 import argparse
-import atexit
 from urllib.parse import parse_qs
 
 from .. import constants as C
 from ..assets.version import get_version
 from ..binders import available_formats
 from ..bots import supported_bots
-from .display import LINE_SIZE, epilog
+from .display import LINE_SIZE
 
 
 class Args:
-    def __init__(self, *args, mutex: list = [], group: list = [], **kargs):
+    def __init__(self, *args, mutex=None, group=None, **kargs):
         self.args = args
         self.kargs = kargs
-        self.group = group
-        self.mutex = mutex
+        self.group = group or []
+        self.mutex = mutex or []
         self.arguments = None
 
     def build(self, parser=None):
@@ -152,7 +151,12 @@ _builder = Args(
             metavar="PATH",
             help="Path where the downloads to be stored.",
         ),
-        Args("--filename", type=str, metavar="NAME", help="Set the output file name"),
+        Args(
+            "--filename",
+            type=str,
+            metavar="NAME",
+            help="Set the output file name",
+        ),
         Args(
             "--filename-only",
             action="store_true",
@@ -176,11 +180,13 @@ _builder = Args(
         ),
         Args(
             mutex=[
-                Args("--all", action="store_true", help="Download all chapters."),
+                Args("--all", action="store_true",
+                     help="Download all chapters."),
                 Args(
                     "--first",
                     type=int,
                     nargs="?",
+                    const=10,
                     metavar="COUNT",
                     help="Download first few chapters (default: 10).",
                 ),
@@ -188,6 +194,7 @@ _builder = Args(
                     "--last",
                     type=int,
                     nargs="?",
+                    const=10,
                     metavar="COUNT",
                     help="Download last few chapters (default: 10).",
                 ),
@@ -235,7 +242,7 @@ _builder = Args(
             help="Use some free proxies from https://free-proxy-list.net/",
         ),
         Args(
-            "--bot",
+            '-b', "--bot",
             type=str,
             choices=supported_bots,
             help="Select a bot. Default: console.",
@@ -259,6 +266,26 @@ _builder = Args(
             type=str,
             metavar="URL",
             help="Selenium Grid URL for Chrome Webdriver",
+        ),
+        Args(
+            '--host',
+            dest="server_host",
+            type=str,
+            metavar="HOSTNAME",
+            help="Server host name. Default: 0.0.0.0",
+        ),
+        Args(
+            '--port',
+            dest="server_port",
+            type=int,
+            metavar="PORT",
+            help="Server port. Default: 8080",
+        ),
+        Args(
+            '--watch',
+            dest="server_watch",
+            action="store_true",
+            help="Run server in watch mode",
         ),
         Args(
             "--suppress",
@@ -299,6 +326,3 @@ _builder = Args(
 
 def get_args():
     return _builder.get_args()
-
-
-atexit.register(epilog)

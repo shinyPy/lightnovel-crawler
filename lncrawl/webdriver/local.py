@@ -10,7 +10,7 @@ from selenium.webdriver import Chrome, ChromeOptions
 from selenium.webdriver.remote.remote_connection import LOGGER
 
 from ..core.soup import SoupMaker
-from ..utils.platforms import Screen, has_display
+from ..utils.platforms import Screen, Platform
 from .elements import WebElement
 from .job_queue import _acquire_queue, _release_queue
 from .scripts import _override_get
@@ -39,7 +39,7 @@ def create_local(
     if not options:
         options = ChromeOptions()
 
-    if not headless and not has_display():
+    if not headless and not Platform.has_display:
         headless = True
 
     # Options for chrome driver
@@ -51,16 +51,10 @@ def create_local(
     options.add_argument("--disable-client-side-phishing-detection")
     options.add_argument("--disable-blink-features=AutomationControlled")
 
-    #  options.add_argument("--disable-dev-shm-usage")
+    # options.add_argument("--disable-dev-shm-usage")
     # options.add_argument("--disable-extensions")
     # options.add_argument("--disable-gpu")
     # options.add_argument("--disable-popup-blocking")
-
-    # Logging configs
-    LOGGER.setLevel(logging.WARN)
-    options.add_argument(f"--log-level={0 if is_debug else 3}")
-    if not is_debug:
-        LOGGER.setLevel(1000)
 
     # Configure window behavior
     if headless:
@@ -91,7 +85,17 @@ def create_local(
     options.strict_file_interactability = False
     options.unhandled_prompt_behavior = "dismiss"
     options.add_experimental_option("useAutomationExtension", False)
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+
+    # Logging configs
+    if is_debug:
+        LOGGER.setLevel(logging.WARN)
+        options.add_argument("--log-level=0")
+    else:
+        LOGGER.setLevel(logging.CRITICAL)
+        options.add_argument("--silent")
+        options.add_argument("--log-level=3")
+        options.add_argument("--disable-logging")
 
     # initialize instance
     chrome = Chrome(
@@ -103,7 +107,7 @@ def create_local(
 
     if not soup_maker:
         soup_maker = SoupMaker()
-    chrome._soup_maker = soup_maker
+    chrome._soup_maker = soup_maker  # type:ignore
     chrome._web_element_cls = WebElement
 
     # _add_virtual_authenticator(chrome)

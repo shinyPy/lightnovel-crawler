@@ -1,95 +1,154 @@
 """
 To search for novels in selected sources
 """
-import random
+import atexit
 import logging
-from typing import Dict, List
-
 from concurrent.futures import Future
+from difflib import SequenceMatcher
+from multiprocessing import Manager, Process, Queue
+from threading import Event
+from typing import Dict, List
+from urllib.parse import urlparse
+
 from slugify import slugify
-import difflib
 
-from ..models import CombinedSearchResult, SearchResult
-from .sources import crawler_list, prepare_crawler
-from .taskman import TaskManager
-
+CONCURRENCY = 25
+MAX_RESULTS = 10
 SEARCH_TIMEOUT = 60
-MAX_RESULTS = 15
 
 logger = logging.getLogger(__name__)
-taskman = TaskManager(10)
 
 
-def _perform_search(app, link):
-    from .app import App
-    assert isinstance(app, App)
+# This function runs in a separate process
+def _search_process(
+    results: Queue,
+    link: str,
+    query: str,
+    file_path: str,
+):
     try:
-        crawler = prepare_crawler(link)
-        results = []
-        for item in crawler.search_novel(app.user_input):
+        from ..models import SearchResult
+        from .sources import prepare_crawler
+
+        crawler = prepare_crawler(link, file_path)
+        setattr(crawler, 'can_use_browser', False)  # disable browser in search
+
+        for item in crawler.search_novel(query):
             if not isinstance(item, SearchResult):
                 item = SearchResult(**item)
             if not (item.url and item.title):
                 continue
-            results.append(item)
-        logger.debug(results)
-        logger.info(f"{len(results)} results from {link}")
-        return results
+            item.title = item.title.lower().title()
+            results.put(item)
+    except KeyboardInterrupt:
+        pass
     except Exception:
         if logger.isEnabledFor(logging.DEBUG):
-            logging.exception("<!> Search Failed! << %s >>", link)
-        return []
+            logger.exception(f'<< {link} >> Search failed')
+
+
+# This runs in a thread to execute the processes
+def _run(p: Process, hostname: str, signal: Event):
+    from .exeptions import LNException
+    try:
+        atexit.register(p.kill)
+        p.start()
+        for _ in range(0, SEARCH_TIMEOUT, 1):
+            if signal.is_set():
+                break
+            if not p.is_alive():
+                break
+            p.join(1)
+        else:
+            if p.is_alive():
+                raise LNException(f"[{hostname}] Timeout")
+    except KeyboardInterrupt:
+        signal.set()
+        pass
     finally:
-        app.progress += 1
+        atexit.unregister(p.kill)
+        p.kill()
 
 
 def search_novels(app):
+    from ..models import CombinedSearchResult, SearchResult
     from .app import App
+    from .sources import crawler_list, rejected_sources
+    from .taskman import TaskManager
+
     assert isinstance(app, App)
 
-    if not app.crawler_links:
+    if not app.crawler_links or not app.user_input:
         return
 
-    sources = app.crawler_links.copy()
-    random.shuffle(sources)
+    manager = Manager()
+    results = manager.Queue()
+    taskman = TaskManager(CONCURRENCY)
 
-    # Add future tasks
+    # Create tasks for the queue
     checked = set()
-    app.progress = 0
-    futures: List[Future] = []
-    for link in sources:
-        crawler = crawler_list[link]
-        if crawler in checked:
+    signal = Event()
+    futures: list[Future] = []
+    for link in app.crawler_links:
+        if link in rejected_sources:
             continue
-        checked.add(crawler)
-        f = taskman.submit_task(_perform_search, app, link)
+
+        hostname = urlparse(link).hostname
+        CrawlerType = crawler_list.get(hostname or '')
+        if CrawlerType in checked:
+            continue
+        checked.add(CrawlerType)
+
+        p = Process(
+            name=hostname,
+            target=_search_process,
+            args=(
+                results,
+                link,
+                app.user_input,
+                getattr(CrawlerType, 'file_path'),
+            ),
+        )
+
+        f = taskman.submit_task(
+            _run, p, hostname, signal
+        )
         futures.append(f)
 
-    # Resolve all futures
-    try:
-        taskman.resolve_futures(
-            futures,
-            desc="Searching",
-            unit="source",
-            timeout=SEARCH_TIMEOUT,
-        )
-    except Exception:
-        if logger.isEnabledFor(logging.DEBUG):
-            logging.exception("<!> Search Failed!")
+    # Wait for all tasks to finish
+    if futures:
+        try:
+            progress = 0
+            app.search_progress = 0
+            for _ in taskman.resolve_as_generator(
+                futures,
+                unit='source',
+                desc='Search',
+                signal=signal,
+            ):
+                progress += 1
+                app.search_progress = 100 * progress / len(futures)
+        except KeyboardInterrupt:
+            pass
+        except Exception:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.exception('Search failed!')
+
+    # Force stop all tasks
+    signal.set()
+    taskman.shutdown(True)
 
     # Combine the search results
     combined: Dict[str, List[SearchResult]] = {}
-    for f in futures:
-        if not f or not f.done() or f.cancelled():
+    while not results.empty():
+        item: SearchResult = results.get()
+        if not (item and item.title):
             continue
-        for item in f.result() or []:
-            if not (item and item.title):
-                continue
-            key = slugify(str(item.title))
-            if len(key) <= 2:
-                continue
-            combined.setdefault(key, [])
-            combined[key].append(item)
+        key = slugify(str(item.title))
+        if len(key) <= 2:
+            continue
+        combined.setdefault(key, [])
+        combined[key].append(item)
 
     # Process combined search results
     processed: List[CombinedSearchResult] = []
@@ -105,7 +164,7 @@ def search_novels(app):
     processed.sort(
         key=lambda x: (
             -len(x.novels),
-            -difflib.SequenceMatcher(None, x.title, app.user_input).ratio(),
+            -SequenceMatcher(a=x.title, b=app.user_input).ratio(),  # type: ignore
         )
     )
     app.search_results = processed[:MAX_RESULTS]

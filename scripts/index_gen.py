@@ -2,6 +2,7 @@
 """
 Build lightnovel-crawler source index to use for update checking.
 """
+import gzip
 import hashlib
 import json
 import os
@@ -13,18 +14,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Event
-from typing import Dict
+from typing import Any, Dict, List
 from urllib.parse import quote_plus, unquote_plus
-
-try:
-    import cloudscraper
-except ImportError:
-    print("cloudscraper not found")
-    exit(1)
 
 try:
     path = os.path.realpath(os.path.abspath(__file__))
     sys.path.insert(0, os.path.dirname(os.path.dirname(path)))
+    from lncrawl import cloudscraper
     from lncrawl.assets.languages import language_codes
     from lncrawl.core.crawler import Crawler
 except ImportError:
@@ -39,6 +35,7 @@ WORKDIR = Path(__file__).parent.parent.absolute()
 
 SOURCES_FOLDER = WORKDIR / "sources"
 INDEX_FILE = SOURCES_FOLDER / "_index.json"
+INDEX_ZIP_FILE = SOURCES_FOLDER / "_index.zip"
 REJECTED_FILE = SOURCES_FOLDER / "_rejected.json"
 CONTRIB_CACHE_FILE = WORKDIR / ".github" / "contribs.json"
 
@@ -49,7 +46,6 @@ HELP_RESULT_QUE = "<!-- auto generated command line output -->"
 
 DATE_FORMAT = "%d %B %Y %I:%M:%S %p"
 
-REPO_BRANCH = "master"
 REPO_OWNER = "dipu-bd"
 REPO_NAME = "lightnovel-crawler"
 REPO_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
@@ -71,11 +67,11 @@ except Exception:
 
 session = cloudscraper.create_scraper()
 
-INDEX_DATA = {
+INDEX_DATA: Dict[str, Any] = {
     "v": int(time.time()),
     "app": {
-        "windows": "https://rebrand.ly/lncrawl",
-        "linux": "https://rebrand.ly/lncrawl-linux",
+        "windows": "https://go.bitanon.dev/lncrawl-windows",
+        "linux": "https://go.bitanon.dev/lncrawl-linux",
     },
     "rejected": {},
     "supported": {},
@@ -83,7 +79,7 @@ INDEX_DATA = {
 }
 
 print("-" * 50)
-res = session.get("https://pypi.org/pypi/lightnovel-crawler/json")
+res = session.get("https://pypi.org/pypi/lightnovel-crawler/json", allow_redirects=True)
 res.raise_for_status()
 pypi_data = res.json()
 print("Latest version:", pypi_data["info"]["version"])
@@ -111,8 +107,12 @@ except ImportError:
 
 assert SOURCES_FOLDER.is_dir()
 
+print('Getting rejected sources')
+# rejected_sources = check_sources.main()
 with open(REJECTED_FILE, encoding="utf8") as fp:
+    # rejected_sources.update(json.load(fp))
     rejected_sources = json.load(fp)
+print("-" * 50)
 
 username_cache = {}
 try:
@@ -160,21 +160,26 @@ def search_user_by(query):
     return queue_cache_result.get(query, "")
 
 
-def git_history(file_path):
+def git_history(file_path) -> List[Dict[Any, Any]]:
     try:
         # cmd = f'git log -1 --diff-filter=ACMT --pretty="%at||%aN||%aE||%s" "{file_path}"'
         cmd = f'git log --follow --diff-filter=ACMT --pretty="%at||%aN||%aE||%s" "{file_path}"'
         logs = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
-        logs = [
-            {"time": int(x[0]), "author": x[1], "email": x[2], "subject": x[3]}
+        return [
+            {
+                "time": int(x[0]),
+                "author": x[1],
+                "email": x[2],
+                "subject": x[3],
+            }
             for x in [
-                line.strip().split("||", maxsplit=4) for line in logs.splitlines(False)
+                line.strip().split("||", maxsplit=4)
+                for line in logs.splitlines(False)
             ]
         ]
-        return logs
     except Exception:
         traceback.print_exc()
-        return {}
+        return []
 
 
 def process_contributors(history):
@@ -241,7 +246,7 @@ def process_file(py_file: Path) -> float:
         crawler()
 
         # Gather crawler info
-        info = {}
+        info: Dict[Any, Any] = {}
         info["id"] = source_id
         info["md5"] = md5
         info["url"] = download_url
@@ -279,10 +284,9 @@ for py_file, future in futures.items():
     print("> %-40s " % py_file.name, end="")
     try:
         runtime = future.result()
+        print("%.3fs" % runtime)
     except Exception as e:
         failures.append("<!> %-40s %s" % (py_file.name, e))
-    finally:
-        print("%.3fs" % runtime)
 if failures:
     print("-" * 50)
     print("\n".join(failures))
@@ -295,19 +299,23 @@ print(
 )
 print("-" * 50)
 
-with open(INDEX_FILE, "w", encoding="utf8") as fp:
-    json.dump(INDEX_DATA, fp)  # , indent='  ')
-
 with open(CONTRIB_CACHE_FILE, "w", encoding="utf8") as fp:
     json.dump(username_cache, fp, indent="  ")
+
+index_file_content = json.dumps(INDEX_DATA)
+with open(INDEX_FILE, "w", encoding="utf8") as fp:
+    fp.write(index_file_content)
+
+with gzip.open(INDEX_ZIP_FILE, 'wb') as f:
+    f.write(index_file_content.encode('utf-8'))
 
 # =========================================================================================== #
 # Update README.md
 # =========================================================================================== #
 
 # Make groups by language codes
-grouped_crawlers = dict()
-grouped_supported = dict()
+grouped_crawlers: Dict[Any, Any] = {}
+grouped_supported: Dict[Any, Any] = {}
 
 for crawler_id, crawler in INDEX_DATA["crawlers"].items():
     ln_code = crawler["file_path"].split("/")[1]
