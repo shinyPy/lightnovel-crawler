@@ -170,10 +170,12 @@ class ShuhaigeCrawler(Crawler):
         # Remove promotional text at the end
         for p in contents.find_all('p'):
             text = p.get_text(strip=True)
-            if ('这章没有结束' in text or
-                '无错的章节将持续' in text or
-                '喜欢【崩坏世界】我能预知未来请大家收藏' in text or
-                '书海阁小说网更新速度全网最快' in text):
+            if (
+                '这章没有结束' in text
+                or '无错的章节将持续' in text
+                or '喜欢【崩坏世界】我能预知未来请大家收藏' in text
+                or '书海阁小说网更新速度全网最快' in text
+            ):
                 p.decompose()
 
         return self.cleaner.extract_contents(contents)
