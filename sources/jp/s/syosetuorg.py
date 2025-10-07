@@ -6,6 +6,7 @@ from lncrawl.core.crawler import Crawler
 logger = logging.getLogger(__name__)
 search_url = "https://syosetu.org/search/?mode=search&word=%s"
 
+
 class SyosetuOrgCrawler(Crawler):
     has_mtl = True
     base_url = "https://syosetu.org/"
